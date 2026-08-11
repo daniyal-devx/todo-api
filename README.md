@@ -69,6 +69,10 @@ Full CRUD cycle tested via `/docs`.
 - Data is stored in memory only — restarting the server clears all tasks.
 - `title` is validated on both create and update: missing or empty (including whitespace-only) titles return a 400 with a clear error message, handled manually rather than relying on FastAPI's default 422 validation error.
 
+## The mortality experiment
+
+After creating a few tasks and restarting the server, `GET /tasks` returned only the original 3 example tasks — everything I'd added was gone. This happens because the task list lives only in memory (a Python variable), so it resets to its starting state every time the process restarts; nothing is written to disk, which is exactly the gap a database solves.
+
 ## AI vs Me
 
 ### My original prompt
