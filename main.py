@@ -1,5 +1,6 @@
 from fastapi import FastAPI,Response, HTTPException
 from pydantic import BaseModel
+import sqlite3
 app = FastAPI(
     title="To-do API",
     description="A simple CRUD API for managing tasks — built for FlyRank's Backend Track Week 2 assignment.",
@@ -54,4 +55,27 @@ def delete_task(id:int):
         raise HTTPException(status_code=404, detail={"error":f"Task {id} not found"})
     tasks.remove(existing_task)
     return Response(status_code=204)
-    
+@app.on_event("startup")
+def startup():
+    conn = sqlite3.connect("tasks.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY,
+            title TEXT NOT NULL,
+            done INTEGER NOT NULL
+        )
+    """)
+    conn.commit()
+
+    cursor.execute("SELECT COUNT(*) FROM tasks")
+    count = cursor.fetchone()[0]
+    if count == 0:
+        cursor.executemany("INSERT INTO tasks (title, done) VALUES (?, ?)", [
+            ("something", 0),
+            ("something else", 1),
+            ("creating header", 0)
+        ])
+        conn.commit()
+
+    conn.close()
