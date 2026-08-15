@@ -19,13 +19,25 @@ def health_check():
     return {"status":"ok"}
 @app.get("/tasks", summary="List all tasks", description="Returns the full list of tasks currently stored in memory.")
 def get_tasks():
+    conn = sqlite3.connect("tasks.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tasks")
+    rows=cursor.fetchall()
+    tasks=[{"id":row["id"], "title": row["title"], "done": bool(row["done"])} for row in rows]
+    conn.close()
     return tasks
 @app.get("/tasks/{id}", summary="Get a single task", description="Returns the task matching the given id. Returns 404 if no task with that id exists.")
 def get_task(id:int):
-    task = next((task for task in tasks if task["id"] == id), None)
-    if task is None:
+    conn = sqlite3.connect("tasks.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tasks WHERE id = ?", (id,))
+    row=cursor.fetchone()
+    conn.close()
+    if row is None:
         raise HTTPException(status_code=404, detail={"error":f"Task {id} not found"})
-    return task
+    return {"id":row["id"], "title": row["title"], "done": bool(row["done"])}
 class TaskCreate(BaseModel):
     title:str | None=None
 @app.post("/tasks", status_code=201, summary="Create a task", description="Creates a new task with the given title. Returns 400 if the title is missing or empty.")
@@ -58,6 +70,7 @@ def delete_task(id:int):
 @app.on_event("startup")
 def startup():
     conn = sqlite3.connect("tasks.db")
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tasks (
@@ -67,7 +80,6 @@ def startup():
         )
     """)
     conn.commit()
-
     cursor.execute("SELECT COUNT(*) FROM tasks")
     count = cursor.fetchone()[0]
     if count == 0:
