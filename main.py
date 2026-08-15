@@ -44,28 +44,47 @@ class TaskCreate(BaseModel):
 def create_task(task:TaskCreate):
     if not task.title or not task.title.strip():
         raise HTTPException(status_code=400, detail={"error":"Task title is required"})
-    new_task = {"id": max(t["id"] for t in tasks) +1 if tasks else 1, "title": task.title, "done": False}
-    tasks.append(new_task)
-    return new_task 
+    conn = sqlite3.connect("tasks.db")
+    cursor=conn.cursor()
+    cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", (task.title, 0))
+    conn.commit()
+    new_id=cursor.lastrowid
+    conn.close()
+    return {"id":new_id, "title":task.title, "done":False}
+    
 class TaskUpdate(BaseModel):
     title:str 
     done:bool 
 @app.put("/tasks/{id}", summary="Update a task", description="Replaces a task's title and done status. Returns 404 if the id doesn't exist, or 400 if the title is missing or empty.")
-def update_task(id:int, task:TaskUpdate):
-    existing_task=next((task for task in tasks if task["id"]==id), None)
-    if existing_task is None:
-        raise HTTPException(status_code=404, detail={"error":f"Task {id} not found"})
+def update_task(id: int, task: TaskUpdate):
     if not task.title or not task.title.strip():
-        raise HTTPException(status_code=400, detail={"error":"Task title is required"})
-    existing_task["title"]=task.title
-    existing_task["done"]=task.done
-    return existing_task
+        raise HTTPException(status_code=400, detail={"error": "Task title is required"})
+
+    conn = sqlite3.connect("tasks.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("UPDATE tasks SET title = ?, done = ? WHERE id = ?", (task.title, int(task.done), id))
+    conn.commit()
+
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail={"error": f"Task {id} not found"})
+
+    cursor.execute("SELECT * FROM tasks WHERE id = ?", (id,))
+    row = cursor.fetchone()
+    conn.close()
+    return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
 @app.delete("/tasks/{id}", summary="Delete a task", description="Deletes the task matching the given id. Returns 404 if no task with that id exists.")
-def delete_task(id:int):
-    existing_task=next((task for task in tasks if task['id']==id),None)
-    if existing_task is None:
-        raise HTTPException(status_code=404, detail={"error":f"Task {id} not found"})
-    tasks.remove(existing_task)
+def delete_task(id: int):
+    conn = sqlite3.connect("tasks.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM tasks WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
+
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail={"error": f"Task {id} not found"})
+
     return Response(status_code=204)
 @app.on_event("startup")
 def startup():
