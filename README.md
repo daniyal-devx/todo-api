@@ -1,10 +1,10 @@
 # Todo API
 
-A simple CRUD API for managing tasks, built with FastAPI. Built as part of FlyRank's Backend Engineering Track, Week 2 assignment.
+A simple CRUD API for managing tasks, built with FastAPI. Built as part of FlyRank's Backend Engineering Track — Week 2 (in-memory CRUD) and Week 3 (SQLite persistence).
 
 ## What this is
 
-A backend REST API that lets you create, read, update, and delete tasks. Data is stored in memory (no database yet), so it resets when the server restarts.
+A backend REST API that lets you create, read, update, and delete tasks. Data is stored in a **SQLite database** (`tasks.db`), so it survives server restarts — this replaced the original in-memory storage from Week 2.
 
 ## How to run it
 
@@ -31,7 +31,27 @@ A backend REST API that lets you create, read, update, and delete tasks. Data is
    uvicorn main:app --reload
    ```
 
+   On first run, this automatically creates `tasks.db` in the project folder, creates the `tasks` table if it doesn't exist, and seeds it with 3 example tasks (only if the table is empty — restarting never duplicates them).
+
 5. Open your browser to `http://localhost:8000/docs` to see the interactive Swagger UI.
+
+## Database
+
+- **Why SQLite:** it's a single file with zero setup — no server to install, no account, no config. It's the simplest way to get real persistence while learning the fundamentals (SQL, parameterized queries, connections) that carry over directly to Postgres later.
+- **Where it lives:** `tasks.db`, created automatically in the project root on first run. It's git-ignored, so every fresh clone starts with a brand new, empty database — not the maintainer's test data.
+- **How to inspect it:** open `tasks.db` in [DB Browser for SQLite](https://sqlitebrowser.org/) (free) to view or edit rows directly, outside the API.
+
+### Example SQL query
+
+```sql
+UPDATE tasks SET done = 1;
+```
+
+This marked every task as done directly in the database. Calling `GET /tasks` right after — with no restart and no code change — immediately reflected the change, because the API and DB Browser both read the exact same `tasks.db` file. There's no syncing step; it's one source of truth.
+
+### Database screenshot
+
+![tasks.db open in DB Browser for SQLite](db-screenshot.png)
 
 ## Endpoints
 
@@ -44,6 +64,8 @@ A backend REST API that lets you create, read, update, and delete tasks. Data is
 | GET    | `/tasks/{id}` | Get a single task by id                  | 200     | 404       |
 | PUT    | `/tasks/{id}` | Replace a task's title and done status   | 200     | 404, 400  |
 | DELETE | `/tasks/{id}` | Delete a task by id                      | 204     | 404       |
+
+All endpoints behave identically to the Week 2 in-memory version — same requests, same responses, same status codes. Only the storage layer underneath changed, from a Python list to SQL queries against `tasks.db`.
 
 ## Example request
 
@@ -66,12 +88,13 @@ Full CRUD cycle tested via `/docs`.
 
 ## Notes
 
-- Data is stored in memory only — restarting the server clears all tasks.
+- Data is stored in SQLite (`tasks.db`) and survives server restarts.
+- All SQL queries use parameterized placeholders (`?`) — no user input is ever glued directly into a SQL string, which is what keeps the database safe from injection.
 - `title` is validated on both create and update: missing or empty (including whitespace-only) titles return a 400 with a clear error message, handled manually rather than relying on FastAPI's default 422 validation error.
 
-## The mortality experiment
+## Persistence proof
 
-After creating a few tasks and restarting the server, `GET /tasks` returned only the original 3 example tasks — everything I'd added was gone. This happens because the task list lives only in memory (a Python variable), so it resets to its starting state every time the process restarts; nothing is written to disk, which is exactly the gap a database solves.
+After creating tasks and restarting the server (`Ctrl+C`, then `uvicorn main:app --reload` again), `GET /tasks` still returned every task created before the restart — including manual edits made directly in DB Browser. This is the core change from Week 2: back then, restarting reset the task list to the 3 original seeds every time, because the list lived only in memory. Now the data lives on disk in `tasks.db`, so it survives the process stopping and starting.
 
 ## AI vs Me
 
