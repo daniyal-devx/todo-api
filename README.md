@@ -1,10 +1,10 @@
 # Todo API
 
-A simple CRUD API for managing tasks, built with FastAPI. Built as part of FlyRank's Backend Engineering Track — Week 2 (in-memory CRUD) and Week 3 (SQLite persistence).
+A simple CRUD API for managing tasks, built with FastAPI. Built as part of FlyRank's Backend Engineering Track — Week 2 (in-memory CRUD), Week 3 (SQLite persistence), and this assignment (containerized Postgres).
 
 ## What this is
 
-A backend REST API that lets you create, read, update, and delete tasks. Data is stored in a **SQLite database** (`tasks.db`), so it survives server restarts — this replaced the original in-memory storage from Week 2.
+A backend REST API that lets you create, read, update, and delete tasks. Data is stored in a **PostgreSQL database running in Docker**, and the entire stack — app + database — starts with a single command. This replaced the SQLite file from the previous stage: same API, same endpoints, now backed by a real database server instead of a single file on disk.
 
 ## How to run it
 
@@ -14,44 +14,45 @@ A backend REST API that lets you create, read, update, and delete tasks. Data is
    cd todo-api
    ```
 
-2. Create and activate a virtual environment:
+2. Copy the example environment file:
    ```bash
-   python -m venv venv
-   venv\Scripts\activate       # Windows
-   source venv/bin/activate    # Mac/Linux
+   cp .env.example .env
    ```
 
-3. Install dependencies:
+3. Start the whole stack — app and database — with one command:
    ```bash
-   pip install -r requirements.txt
+   docker compose up
    ```
 
-4. Run the server:
-   ```bash
-   uvicorn main:app --reload
-   ```
+   This builds the app's image, starts a Postgres container, waits for Postgres to report healthy, then starts the API. On first run it automatically creates the `tasks` table and seeds it with 3 example tasks.
 
-   On first run, this automatically creates `tasks.db` in the project folder, creates the `tasks` table if it doesn't exist, and seeds it with 3 example tasks (only if the table is empty — restarting never duplicates them).
+4. Open your browser to `http://localhost:8000/docs` to see the interactive Swagger UI.
 
-5. Open your browser to `http://localhost:8000/docs` to see the interactive Swagger UI.
+5. To stop everything: `Ctrl+C`, then `docker compose down` (add `-v` if you also want to wipe the database volume).
+
+### Environment variables
+
+Set in `.env` (see `.env.example`):
+
+| Variable       | Description                                                              |
+|----------------|---------------------------------------------------------------------------|
+| `DATABASE_URL` | Postgres connection string (used when running locally, outside Docker)   |
+
+When running via `docker compose up`, `DATABASE_URL` is set automatically inside `compose.yaml` to point at the `db` service — the `.env` value is only used if you run the app directly on your machine without Docker.
 
 ## Database
 
-- **Why SQLite:** it's a single file with zero setup — no server to install, no account, no config. It's the simplest way to get real persistence while learning the fundamentals (SQL, parameterized queries, connections) that carry over directly to Postgres later.
-- **Where it lives:** `tasks.db`, created automatically in the project root on first run. It's git-ignored, so every fresh clone starts with a brand new, empty database — not the maintainer's test data.
-- **How to inspect it:** open `tasks.db` in [DB Browser for SQLite](https://sqlitebrowser.org/) (free) to view or edit rows directly, outside the API.
-
-### Example SQL query
-
-```sql
-UPDATE tasks SET done = 1;
-```
-
-This marked every task as done directly in the database. Calling `GET /tasks` right after — with no restart and no code change — immediately reflected the change, because the API and DB Browser both read the exact same `tasks.db` file. There's no syncing step; it's one source of truth.
+- **Engine:** PostgreSQL 18, running in a Docker container — not installed on the host machine at all.
+- **Persistence:** a named Docker volume (`taskdata`) stores the actual database files outside the container, so data survives `docker compose down` / `docker compose up` cycles, and even full container removal.
+- **Connection:** the app connects via `psycopg` (the standard Python driver for Postgres) using a connection string from `DATABASE_URL`. Inside Docker Compose, the app reaches the database at host `db` (the service name) rather than `localhost`, since each container is its own isolated network namespace.
+- **How to inspect it:** with the stack running, open a SQL prompt directly inside the database container:
+  ```bash
+  docker exec -it todo-api-db-1 psql -U postgres -d tasks -c "SELECT * FROM tasks;"
+  ```
 
 ### Database screenshot
 
-![tasks.db open in DB Browser for SQLite](db-screenshot.png)
+![tasks table in Postgres via psql](db-screenshot-postgres.png)
 
 ## Endpoints
 
@@ -65,19 +66,19 @@ This marked every task as done directly in the database. Calling `GET /tasks` ri
 | PUT    | `/tasks/{id}` | Replace a task's title and done status   | 200     | 404, 400  |
 | DELETE | `/tasks/{id}` | Delete a task by id                      | 204     | 404       |
 
-All endpoints behave identically to the Week 2 in-memory version — same requests, same responses, same status codes. Only the storage layer underneath changed, from a Python list to SQL queries against `tasks.db`.
+All endpoints behave identically across every storage swap — in-memory (Week 2), SQLite (Week 3), and now Postgres in Docker. Same requests, same responses, same status codes. Only the storage layer underneath ever changes.
 
 ## Example request
 
 ```bash
-curl -i -X POST http://localhost:8000/tasks -H "Content-Type: application/json" -d '{"title":"Buy milk"}'
+curl -i -X POST http://localhost:8000/tasks -H "Content-Type: application/json" -d '{"title":"Test Postgres CRUD"}'
 ```
 
 ```
 HTTP/1.1 201 Created
 content-type: application/json
 
-{"id":5,"title":"Buy milk","done":false}
+{"id":4,"title":"Test Postgres CRUD","done":false}
 ```
 
 ## Swagger UI
@@ -88,13 +89,14 @@ Full CRUD cycle tested via `/docs`.
 
 ## Notes
 
-- Data is stored in SQLite (`tasks.db`) and survives server restarts.
-- All SQL queries use parameterized placeholders (`?`) — no user input is ever glued directly into a SQL string, which is what keeps the database safe from injection.
+- Data is stored in PostgreSQL, running in Docker, and survives both app restarts and full stack teardowns (`docker compose down` / `up`).
+- All SQL queries use parameterized placeholders (`%s`, the psycopg style) — no user input is ever glued directly into a SQL string, which is what keeps the database safe from injection.
 - `title` is validated on both create and update: missing or empty (including whitespace-only) titles return a 400 with a clear error message, handled manually rather than relying on FastAPI's default 422 validation error.
+- The database password lives only in `.env` (git-ignored) — never hardcoded in code or committed to this repo. `.env.example` documents which variable to set without exposing a real secret.
 
 ## Persistence proof
 
-After creating tasks and restarting the server (`Ctrl+C`, then `uvicorn main:app --reload` again), `GET /tasks` still returned every task created before the restart — including manual edits made directly in DB Browser. This is the core change from Week 2: back then, restarting reset the task list to the 3 original seeds every time, because the list lived only in memory. Now the data lives on disk in `tasks.db`, so it survives the process stopping and starting.
+After creating tasks and running `docker compose down` followed by `docker compose up` — a full teardown and restart of both containers, not just the app — `GET /tasks` still returned the exact same rows, with no re-seeding. This is because the Postgres data lives in the `taskdata` Docker volume, which exists independently of the containers themselves. Removing and recreating the containers doesn't touch the volume, so the data survives.
 
 ## AI vs Me — Week 3 (SQLite migration)
 
