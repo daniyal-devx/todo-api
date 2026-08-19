@@ -43,7 +43,7 @@ def create_task(task:TaskCreate):
         raise HTTPException(status_code=400, detail={"error":"Task title is required"})
     conn = get_connection()
     cursor=conn.cursor()
-    cursor.execute("INSERT INTO tasks (title, done) VALUES (%s, %s)  RETURNING * ", (task.title, 0))
+    cursor.execute("INSERT INTO tasks (title, done) VALUES (%s, %s)  RETURNING * ", (task.title, False))
     new_id = cursor.fetchone()["id"]
     conn.commit()
     conn.close()
@@ -59,7 +59,7 @@ def update_task(id: int, task: TaskUpdate):
 
     conn=get_connection()
     cursor=conn.cursor()
-    cursor.execute("UPDATE tasks SET title = %s, done = %s WHERE id = %s", (task.title, int(task.done), id))
+    cursor.execute("UPDATE tasks SET title = %s, done = %s WHERE id = %s", (task.title, task.done, id))
     conn.commit()
 
     if cursor.rowcount == 0:
