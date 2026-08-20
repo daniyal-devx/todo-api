@@ -1,0 +1,53 @@
+=== ai-version/Dockerfile ===
+
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt requirements.txt
+RUN pip install -r requirements.txt
+COPY . .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+=== ai-version/compose.yaml ===
+
+version: "3.9"
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: tasks
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  pgdata:
+
+
+=== ai-version/.env.example ===
+
+DATABASE_URL=postgresql://postgres:yourpassword@db:5432/tasks
+POSTGRES_PASSWORD=yourpassword
+
+
+=== ai-version/requirements.txt ===
+
+fastapi
+uvicorn
+psycopg[binary]
+python-dotenv
+pydantic

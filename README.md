@@ -59,7 +59,7 @@ When running via `docker compose up`, `DATABASE_URL` is set automatically inside
 | Method | Path          | Description                             | Success | Errors    |
 |--------|---------------|------------------------------------------|---------|-----------|
 | GET    | `/`           | API info                                 | 200     | -         |
-| GET    | `/health`     | Health check                             | 200     | -         |
+| GET    | `/health`     | Health check (verifies DB connection)    | 200     | 503       |
 | GET    | `/tasks`      | List all tasks                           | 200     | -         |
 | POST   | `/tasks`      | Create a new task                        | 201     | 400       |
 | GET    | `/tasks/{id}` | Get a single task by id                  | 200     | 404       |
@@ -101,6 +101,42 @@ After creating tasks and running `docker compose down` followed by `docker compo
 ## Extras
 
 - **Real health check:** `GET /health` runs `SELECT 1` against the database and reports `db: "ok"` on success, or `503` with `db: "unreachable"` if the database can't be reached. This is the same pattern real load balancers use to decide whether to route traffic to an instance.
+
+## AI vs Me — Containerizing Postgres (Stage 6)
+
+### My prompt (first attempt, written from memory)
+
+> "I want you to containerize a CRUD API onto postgres your path should be using python, psycopg and the tasks table and the seed once on empty rule at startup it should also follow that with the same five endpoints and their same behaviour like same exceptional rules as before and it should consist parameterized queries and password of like db should never be hardcoded it should always load it from .env and a specific volume for persistence and one command startup via docker compose up"
+
+### What it did better
+
+Nothing outperformed my own implementation — the gaps below were all things I already had right in my hand-built version.
+
+### What it got wrong or quietly ignored
+
+1. **Flat error responses**, e.g. `{"detail": "Task not found"}`, instead of my nested `{"detail": {"error": "..."}}` shape. My prompt said "same exceptional rules as before," but "before" only means something to me — the AI has no access to that context, so it fell back to FastAPI's plain default.
+2. **Whitespace-only titles were not rejected.** It checked `if not task.title:`, which only catches a fully empty string — the same gap that showed up in my Week 2 rematch too.
+3. **PUT didn't strictly require both fields.** Its `Task` model gave `done` a default value (`done: bool = False`), so a `PUT` request could technically omit `done` and it would silently default instead of being rejected — my own version treats PUT as a strict full replacement.
+4. **No healthcheck in `compose.yaml`.** This is the exact startup-race bug I hit and had to fix myself in Stage 4 (`api` trying to connect before Postgres finished initializing) — the AI's compose file has no `condition: service_healthy`, so a fresh clone would likely hit the same crash I did.
+5. **Different Postgres version and volume path** — `postgres:15` with `/var/lib/postgresql/data`, instead of the `postgres:18` / `/var/lib/postgresql` combination I had to work out myself after a real version-compatibility crash in Stage 0.
+
+### What my prompt forgot to specify
+
+- The exact error response shape
+- That whitespace-only titles count as invalid, not just empty ones
+- That PUT must require both `title` and `done`, with no defaults
+- A healthcheck requirement on the `db` service before the app connects
+- A specific Postgres version or volume mount path
+
+### The rematch
+
+Tightened prompt:
+
+> "Containerize a task CRUD API onto Postgres, using Python, FastAPI, and psycopg. Table `tasks` with columns `id` (serial primary key), `title` (text, not null), `done` (boolean, default false). On startup, create the table if missing and seed 3 example tasks only if the table is empty. Implement these 5 endpoints with these exact behaviors: `GET /tasks` (200, list all), `GET /tasks/{id}` (200 or 404), `POST /tasks` (201, or 400 if title is missing/empty/whitespace-only), `PUT /tasks/{id}` (200, full replace — both title and done are required, 400 if title invalid, 404 if id doesn't exist), `DELETE /tasks/{id}` (204, or 404). All error responses must use the shape `{"error": "message"}`. Use parameterized queries (`%s`). Database password must come from a `.env` file via `python-dotenv`, never hardcoded. Use a named Docker volume for Postgres data persistence. Include a `Dockerfile` and `compose.yaml` with a `healthcheck` on the `db` service so the app waits for Postgres to be ready before connecting, not just started."
+
+Naming the error shape, PUT's full-replace requirement, whitespace validation, and the compose healthcheck explicitly closes every gap the first version had — the same lesson from both earlier rematches, holding again here: an AI's output is only as precise as the spec it's given, and the same categories of gaps (error shape, PUT semantics, validation edge cases) keep recurring across every rematch I've done in this program, because they're exactly the kind of implicit conventions a spec-writer forgets to state out loud.
+
+Both AI attempts are kept in `ai-version/`, separate from the hand-built Stage 0–5 code.
 
 ## AI vs Me — Week 3 (SQLite migration)
 
