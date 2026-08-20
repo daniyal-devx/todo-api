@@ -98,6 +98,10 @@ Full CRUD cycle tested via `/docs`.
 
 After creating tasks and running `docker compose down` followed by `docker compose up` — a full teardown and restart of both containers, not just the app — `GET /tasks` still returned the exact same rows, with no re-seeding. This is because the Postgres data lives in the `taskdata` Docker volume, which exists independently of the containers themselves. Removing and recreating the containers doesn't touch the volume, so the data survives.
 
+## Extras
+
+- **Real health check:** `GET /health` runs `SELECT 1` against the database and reports `db: "ok"` on success, or `503` with `db: "unreachable"` if the database can't be reached. This is the same pattern real load balancers use to decide whether to route traffic to an instance.
+
 ## AI vs Me — Week 3 (SQLite migration)
 
 ### My prompt

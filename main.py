@@ -13,9 +13,16 @@ app = FastAPI(
 @app.get("/", summary="API info", description="Returns basic info about this API: its name, version, and available endpoints.")
 def read_root():
     return { "name": "Task API", "version": "1.0", "endpoints": ["/tasks"] }
-@app.get("/health", summary="Health check", description="Returns a simple status check to confirm the server is running.")
+@app.get("/health", summary="Health check", description="Returns a simple status check to confirm the server and database are running.")
 def health_check():
-    return {"status":"ok"}
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        conn.close()
+        return {"status": "ok", "db": "ok"}
+    except Exception:
+        raise HTTPException(status_code=503, detail={"status": "error", "db": "unreachable"})
 @app.get("/tasks", summary="List all tasks", description="Returns the full list of tasks currently stored in memory.")
 def get_tasks():
     conn = get_connection()
