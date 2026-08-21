@@ -50,12 +50,23 @@ def get_public_info():
     return {"message": "Welcome stranger! This info is public."}
 
 
-@app.get("/protected/profile", summary="Get profile (unverified)", description="Returns profile data if a bearer token is present in the Authorization header. Token is not yet verified.")
+@app.get("/protected/profile", summary="Get profile (verified)", description="Returns profile data after verifying the bearer token with Supabase. Returns 401 if the token is missing, malformed, invalid, or expired.")
 def get_profile(authorization: str | None = Header(default=None)):
     if authorization is None or not authorization.startswith("Bearer ") or authorization.removeprefix("Bearer ").strip() == "":
         raise HTTPException(status_code=401, detail={"error": "Access token required"})
     
-    return {"message": "Token received, verification comes in Stage 3"}
+    token = authorization.removeprefix("Bearer ").strip()
+    
+    try:
+        user = supabase.auth.get_user(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail={"error": "Invalid or expired token"})
+    
+    return {
+        "id": user.user.id,
+        "email": user.user.email,
+        "created_at": user.user.created_at
+    }
 @app.get("/health", summary="Health check", description="Returns a simple status check to confirm the server and database are running.")
 def health_check():
     try:
