@@ -13,6 +13,8 @@ services:
     environment:
       POSTGRES_PASSWORD: dev
       POSTGRES_DB: tasks
+    ports:
+      - "5432:5432"
     volumes:
       - taskdata:/var/lib/postgresql
     healthcheck:
