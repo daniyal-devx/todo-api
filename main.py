@@ -14,6 +14,36 @@ app = FastAPI(
     description="A simple CRUD API for managing tasks — built for FlyRank's Backend Track Week 2 assignment.",
     version="1.0.0"
 )
+class AuthRequest(BaseModel):
+    email: str | None = None
+    password: str | None = None
+
+@app.post("/auth/signup", status_code=201, summary="Sign up a new user", description="Creates a new user account with the provided email and password.")
+def sign_up_user(auth: AuthRequest):
+    if not auth.email or not auth.email.strip() or not auth.password or not auth.password.strip():
+        raise HTTPException(status_code=400, detail={"error": "Email and password are required"})
+    
+    try:
+        result = supabase.auth.sign_up({"email": auth.email, "password": auth.password})
+    except Exception as e:
+        raise HTTPException(status_code=400, detail={"error": "Signup failed — email may already be registered"})
+    
+    return {"user": result.user}
+
+@app.post("/auth/login", summary="Authenticate user", description="Authenticates a user with the provided email and password.")
+def authenticate_user(auth: AuthRequest):
+    if not auth.email or not auth.email.strip() or not auth.password or not auth.password.strip():
+        raise HTTPException(status_code=400, detail={"error": "Email and password are required"})
+    
+    try:
+        result = supabase.auth.sign_in_with_password({"email": auth.email, "password": auth.password})
+    except Exception:
+        raise HTTPException(status_code=401, detail={"error": "Invalid login credentials"})
+    
+    return {
+        "access_token": result.session.access_token,
+        "refresh_token": result.session.refresh_token
+    }
 @app.get("/", summary="API info", description="Returns basic info about this API: its name, version, and available endpoints.")
 def read_root():
     return { "name": "Task API", "version": "1.0", "endpoints": ["/tasks"] }
