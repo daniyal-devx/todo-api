@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 import psycopg
 from supabase import create_client, Client
+from fastapi import Header
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -44,9 +45,17 @@ def authenticate_user(auth: AuthRequest):
         "access_token": result.session.access_token,
         "refresh_token": result.session.refresh_token
     }
-@app.get("/", summary="API info", description="Returns basic info about this API: its name, version, and available endpoints.")
-def read_root():
-    return { "name": "Task API", "version": "1.0", "endpoints": ["/tasks"] }
+@app.get("/public/info", summary="Public info", description="Returns a public message, no authentication required.")
+def get_public_info():
+    return {"message": "Welcome stranger! This info is public."}
+
+
+@app.get("/protected/profile", summary="Get profile (unverified)", description="Returns profile data if a bearer token is present in the Authorization header. Token is not yet verified.")
+def get_profile(authorization: str | None = Header(default=None)):
+    if authorization is None or not authorization.startswith("Bearer ") or authorization.removeprefix("Bearer ").strip() == "":
+        raise HTTPException(status_code=401, detail={"error": "Access token required"})
+    
+    return {"message": "Token received, verification comes in Stage 3"}
 @app.get("/health", summary="Health check", description="Returns a simple status check to confirm the server and database are running.")
 def health_check():
     try:
