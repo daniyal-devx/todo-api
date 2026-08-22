@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import psycopg
 from supabase import create_client, Client
 from fastapi import Header
+from fastapi import Depends
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -50,8 +51,7 @@ def get_public_info():
     return {"message": "Welcome stranger! This info is public."}
 
 
-@app.get("/protected/profile", summary="Get profile (verified)", description="Returns profile data after verifying the bearer token with Supabase. Returns 401 if the token is missing, malformed, invalid, or expired.")
-def get_profile(authorization: str | None = Header(default=None)):
+def verify_token(authorization: str | None = Header(default=None)):
     if authorization is None or not authorization.startswith("Bearer ") or authorization.removeprefix("Bearer ").strip() == "":
         raise HTTPException(status_code=401, detail={"error": "Access token required"})
     
@@ -62,11 +62,29 @@ def get_profile(authorization: str | None = Header(default=None)):
     except Exception:
         raise HTTPException(status_code=401, detail={"error": "Invalid or expired token"})
     
+    return user.user
+
+
+@app.get("/protected/profile", summary="Get profile (verified)", description="Returns profile data after verifying the bearer token with Supabase. Returns 401 if the token is missing, malformed, invalid, or expired.")
+def get_profile(current_user = Depends(verify_token)):
     return {
-        "id": user.user.id,
-        "email": user.user.email,
-        "created_at": user.user.created_at
+        "id": current_user.id,
+        "email": current_user.email,
+        "created_at": current_user.created_at
     }
+@app.get("/protected/dashboard", summary="Dashboard (verified)", description="Example second protected route, reusing the same auth guard as /protected/profile.")
+def get_dashboard(current_user = Depends(verify_token)):
+    return {"message": f"Welcome to your dashboard, {current_user.email}"}
+
+
+@app.post("/auth/logout", status_code=204, summary="Log out", description="Ends the current user's session. Requires a valid bearer token.")
+def logout_user(current_user = Depends(verify_token)):
+    try:
+        supabase.auth.sign_out()
+    except Exception:
+        raise HTTPException(status_code=401, detail={"error": "Invalid or expired token"})
+    
+    return Response(status_code=204)
 @app.get("/health", summary="Health check", description="Returns a simple status check to confirm the server and database are running.")
 def health_check():
     try:
