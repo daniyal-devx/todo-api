@@ -1,10 +1,10 @@
 # Todo API
 
-A simple CRUD API for managing tasks, built with FastAPI. Built as part of FlyRank's Backend Engineering Track — Week 2 (in-memory CRUD), Week 3 (SQLite persistence), and this assignment (containerized Postgres).
+A simple CRUD API for managing tasks, built with FastAPI. Built as part of FlyRank's Backend Engineering Track — Week 2 (in-memory CRUD), Week 3 (SQLite persistence), Postgres + Docker (containerized database), and this assignment, A4 (Supabase authentication).
 
 ## What this is
 
-A backend REST API that lets you create, read, update, and delete tasks. Data is stored in a **PostgreSQL database running in Docker**, and the entire stack — app + database — starts with a single command. This replaced the SQLite file from the previous stage: same API, same endpoints, now backed by a real database server instead of a single file on disk.
+A backend REST API that lets you create, read, update, and delete tasks — now with real user authentication in front of it. Data is stored in a **PostgreSQL database running in Docker**. User accounts, password hashing, and JSON Web Tokens are handled entirely by **Supabase Auth** — this API never stores or sees a raw password; it only ever receives and verifies tokens that Supabase issues. The entire stack — app + database — starts with a single command.
 
 ## How to run it
 
@@ -14,10 +14,13 @@ A backend REST API that lets you create, read, update, and delete tasks. Data is
    cd todo-api
    ```
 
-2. Copy the example environment file:
+2. Copy the example environment file and fill in your own values:
    ```bash
    cp .env.example .env
    ```
+   You'll need a free [Supabase](https://supabase.com) project — create one, then copy your **Project URL** and **anon/publishable key** from *Project Settings → API* into `.env`.
+
+   One-time Supabase setting: in your Supabase dashboard, go to *Authentication → Sign In / Providers → Email* and turn **off** "Confirm email." This lets a fresh signup log in immediately without clicking an email link (fine for a practice project; you'd leave this on in production).
 
 3. Start the whole stack — app and database — with one command:
    ```bash
@@ -26,7 +29,7 @@ A backend REST API that lets you create, read, update, and delete tasks. Data is
 
    This builds the app's image, starts a Postgres container, waits for Postgres to report healthy, then starts the API. On first run it automatically creates the `tasks` table and seeds it with 3 example tasks.
 
-4. Open your browser to `http://localhost:8000/docs` to see the interactive Swagger UI.
+4. Open your browser to `http://localhost:8000/docs` to see the interactive Swagger UI. Click **Authorize**, paste an access token (from `/auth/login`), and you can test every protected route directly from the browser.
 
 5. To stop everything: `Ctrl+C`, then `docker compose down` (add `-v` if you also want to wipe the database volume).
 
@@ -34,11 +37,44 @@ A backend REST API that lets you create, read, update, and delete tasks. Data is
 
 Set in `.env` (see `.env.example`):
 
-| Variable       | Description                                                              |
-|----------------|---------------------------------------------------------------------------|
-| `DATABASE_URL` | Postgres connection string (used when running locally, outside Docker)   |
+| Variable        | Description                                                              |
+|-----------------|---------------------------------------------------------------------------|
+| `DATABASE_URL`  | Postgres connection string (used when running locally, outside Docker)   |
+| `SUPABASE_URL`  | Your Supabase project's URL, from *Project Settings → API*               |
+| `SUPABASE_KEY`  | Your Supabase project's anon/publishable key — safe to use client-side, **never** the `service_role`/secret key |
 
-When running via `docker compose up`, `DATABASE_URL` is set automatically inside `compose.yaml` to point at the `db` service — the `.env` value is only used if you run the app directly on your machine without Docker.
+When running via `docker compose up`, all three variables are passed into the `api` container from your `.env` file automatically.
+
+## Authentication
+
+Auth is built on **Supabase Auth**, an external Identity Provider — this API never hashes a password or signs a token itself. The flow:
+
+1. A client sends `email`/`password` to `/auth/signup` or `/auth/login`. This API forwards those credentials to Supabase.
+2. Supabase creates/verifies the account and returns a signed **JWT** (access token) plus a refresh token.
+3. The client sends that JWT on every request to a protected route, in the header: `Authorization: Bearer <token>`.
+4. This API asks Supabase to verify the token (`supabase.auth.get_user(token)`) before letting the request through. An invalid, tampered, or expired token is rejected with `401`.
+
+Token verification is implemented once, as a reusable FastAPI dependency (`verify_token`), and applied to every protected route — not copy-pasted per route.
+
+### Endpoints
+
+| Method | Path                    | Auth required | Description                                             | Success | Errors    |
+|--------|--------------------------|----------------|-----------------------------------------------------------|---------|-----------|
+| GET    | `/`                      | No             | API info                                                   | 200     | -         |
+| GET    | `/health`                | No             | Health check (verifies DB connection)                      | 200     | 503       |
+| POST   | `/auth/signup`           | No             | Create a new user account via Supabase                     | 201     | 400       |
+| POST   | `/auth/login`            | No             | Authenticate and receive an access + refresh token          | 200     | 400, 401  |
+| POST   | `/auth/logout`           | Yes (Bearer)   | End the current session                                    | 204     | 401       |
+| GET    | `/public/info`           | No             | Open, unauthenticated info endpoint                         | 200     | -         |
+| GET    | `/protected/profile`     | Yes (Bearer)   | Returns the authenticated user's id, email, created_at      | 200     | 401       |
+| GET    | `/protected/dashboard`   | Yes (Bearer)   | Second protected route, reuses the same auth guard          | 200     | 401       |
+| GET    | `/tasks`                 | No             | List all tasks                                              | 200     | -         |
+| POST   | `/tasks`                 | No             | Create a new task                                            | 201     | 400       |
+| GET    | `/tasks/{id}`            | No             | Get a single task by id                                     | 200     | 404       |
+| PUT    | `/tasks/{id}`            | No             | Replace a task's title and done status                      | 200     | 404, 400  |
+| DELETE | `/tasks/{id}`            | No             | Delete a task by id                                          | 204     | 404       |
+
+> Note: `/tasks` routes are not yet tied to individual users — any authenticated or unauthenticated caller can access all tasks. Per-user task ownership is planned as a follow-up (tenant isolation), not part of this assignment.
 
 ## Database
 
@@ -54,26 +90,24 @@ When running via `docker compose up`, `DATABASE_URL` is set automatically inside
 
 ![tasks table in Postgres via psql](db-screenshot-postgres.png)
 
-## Endpoints
+## Example requests
 
-| Method | Path          | Description                             | Success | Errors    |
-|--------|---------------|------------------------------------------|---------|-----------|
-| GET    | `/`           | API info                                 | 200     | -         |
-| GET    | `/health`     | Health check (verifies DB connection)    | 200     | 503       |
-| GET    | `/tasks`      | List all tasks                           | 200     | -         |
-| POST   | `/tasks`      | Create a new task                        | 201     | 400       |
-| GET    | `/tasks/{id}` | Get a single task by id                  | 200     | 404       |
-| PUT    | `/tasks/{id}` | Replace a task's title and done status   | 200     | 404, 400  |
-| DELETE | `/tasks/{id}` | Delete a task by id                      | 204     | 404       |
+**Sign up, log in, call a protected route:**
+```bash
+curl -i -X POST http://localhost:8000/auth/signup -H "Content-Type: application/json" -d '{"email":"you@example.com","password":"yourpassword"}'
+# -> 201 Created
 
-All endpoints behave identically across every storage swap — in-memory (Week 2), SQLite (Week 3), and now Postgres in Docker. Same requests, same responses, same status codes. Only the storage layer underneath ever changes.
+curl -i -X POST http://localhost:8000/auth/login -H "Content-Type: application/json" -d '{"email":"you@example.com","password":"yourpassword"}'
+# -> 200 OK, returns { "access_token": "...", "refresh_token": "..." }
 
-## Example request
+curl -i http://localhost:8000/protected/profile -H "Authorization: Bearer <ACCESS_TOKEN>"
+# -> 200 OK, returns { "id": "...", "email": "...", "created_at": "..." }
+```
 
+**Create a task:**
 ```bash
 curl -i -X POST http://localhost:8000/tasks -H "Content-Type: application/json" -d '{"title":"Test Postgres CRUD"}'
 ```
-
 ```
 HTTP/1.1 201 Created
 content-type: application/json
@@ -83,28 +117,29 @@ content-type: application/json
 
 ## Swagger UI
 
-Full CRUD cycle tested via `/docs`.
+Full CRUD cycle tested via `/docs`, plus the Bearer auth "Authorize" flow tested end-to-end from the browser.
 
 ![Swagger UI showing GET /tasks response](s1.png)
 
+![Swagger UI Authorize dialog with Bearer token](swagger-auth-screenshot.png)
+
 ## Notes
 
+- This API never stores or sees a raw password — Supabase Auth handles signup, login, password hashing, and JWT signing/verification entirely.
+- Only the **anon/publishable** Supabase key is used in this app. The `service_role`/secret key (which bypasses all security) is never used or exposed.
+- Token verification is centralized in a single reusable dependency (`verify_token`), applied to every protected route via `Depends(...)` — not duplicated per route.
 - Data is stored in PostgreSQL, running in Docker, and survives both app restarts and full stack teardowns (`docker compose down` / `up`).
 - All SQL queries use parameterized placeholders (`%s`, the psycopg style) — no user input is ever glued directly into a SQL string, which is what keeps the database safe from injection.
-- `title` is validated on both create and update: missing or empty (including whitespace-only) titles return a 400 with a clear error message, handled manually rather than relying on FastAPI's default 422 validation error.
-- The database password lives only in `.env` (git-ignored) — never hardcoded in code or committed to this repo. `.env.example` documents which variable to set without exposing a real secret.
+- `title` is validated on both create and update: missing or empty (including whitespace-only) titles return a 400 with a clear error message, handled manually rather than relying on FastAPI's default 422 validation error. The same pattern is used for `email`/`password` on signup and login.
+- All secrets (`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_KEY`) live only in `.env` (git-ignored) — never hardcoded in code or committed to this repo. `.env.example` documents which variables to set without exposing real secrets.
 
 ## Persistence proof
 
-After creating tasks and running `docker compose down` followed by `docker compose up` — a full teardown and restart of both containers, not just the app — `GET /tasks` still returned the exact same rows, with no re-seeding. This is because the Postgres data lives in the `taskdata` Docker volume, which exists independently of the containers themselves. Removing and recreating the containers doesn't touch the volume, so the data survives.
+<!-- keep your existing persistence-proof section/screenshots here -->
 
-## Extras
+## AI vs Me — Postgres + Docker
 
-- **Real health check:** `GET /health` runs `SELECT 1` against the database and reports `db: "ok"` on success, or `503` with `db: "unreachable"` if the database can't be reached. This is the same pattern real load balancers use to decide whether to route traffic to an instance.
-
-## AI vs Me — Containerizing Postgres (Stage 6)
-
-### My prompt (first attempt, written from memory)
+### My prompt
 
 > "I want you to containerize a CRUD API onto postgres your path should be using python, psycopg and the tasks table and the seed once on empty rule at startup it should also follow that with the same five endpoints and their same behaviour like same exceptional rules as before and it should consist parameterized queries and password of like db should never be hardcoded it should always load it from .env and a specific volume for persistence and one command startup via docker compose up"
 
