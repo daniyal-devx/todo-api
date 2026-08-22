@@ -6,6 +6,7 @@ import psycopg
 from supabase import create_client, Client
 from fastapi import Header
 from fastapi import Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -51,11 +52,13 @@ def get_public_info():
     return {"message": "Welcome stranger! This info is public."}
 
 
-def verify_token(authorization: str | None = Header(default=None)):
-    if authorization is None or not authorization.startswith("Bearer ") or authorization.removeprefix("Bearer ").strip() == "":
+bearer_scheme = HTTPBearer(auto_error=False)
+
+def verify_token(credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme)):
+    if credentials is None or not credentials.credentials.strip():
         raise HTTPException(status_code=401, detail={"error": "Access token required"})
     
-    token = authorization.removeprefix("Bearer ").strip()
+    token = credentials.credentials
     
     try:
         user = supabase.auth.get_user(token)
