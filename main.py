@@ -7,6 +7,7 @@ from supabase import create_client, Client
 from fastapi import Header
 from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from src.llm.schema import TriageInput, TriageOutput, Category, Urgency
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -190,3 +191,22 @@ def startup():
         conn.commit()
 
     conn.close()
+
+
+@app.post("/triage", response_model=TriageOutput, summary="Triage a todo item", description="Classifies messy todo text into a category and urgency level.")
+def triage_task(payload: TriageInput):
+    if not payload.text or not payload.text.strip():
+        raise HTTPException(status_code=400, detail={"error": "text is required"})
+    if len(payload.text) > 500:
+        raise HTTPException(status_code=400, detail={"error": "text must be 500 characters or fewer"})
+
+    if os.getenv("LLM_STUB") == "1":
+        return TriageOutput(
+            category=Category.other,
+            urgency=Urgency.normal,
+            confidence=0.5,
+            reason="Stub mode: no model was called."
+        )
+
+    # Stage 2 will fill this in — real model call goes here
+    raise HTTPException(status_code=501, detail={"error": "Model call not implemented yet"})
