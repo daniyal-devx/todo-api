@@ -8,7 +8,12 @@ from fastapi import Header
 from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.llm.schema import TriageInput, TriageOutput, Category, Urgency
+from openai import OpenAI
 load_dotenv()
+llm_client = OpenAI(
+    base_url=os.environ["LLM_BASE_URL"],
+    api_key=os.environ["LLM_API_KEY"],
+)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -18,6 +23,12 @@ app = FastAPI(
     description="A simple CRUD API for managing tasks — built for FlyRank's Backend Track Week 2 assignment.",
     version="1.0.0"
 )
+def load_prompt(filename: str) -> str:
+    with open(f"prompts/{filename}", "r", encoding="utf-8") as f:
+        return f.read()
+
+TRIAGE_PROMPT = load_prompt("triage-v1.md")
+
 class AuthRequest(BaseModel):
     email: str | None = None
     password: str | None = None
@@ -208,5 +219,12 @@ def triage_task(payload: TriageInput):
             reason="Stub mode: no model was called."
         )
 
-    # Stage 2 will fill this in — real model call goes here
-    raise HTTPException(status_code=501, detail={"error": "Model call not implemented yet"})
+    response = llm_client.chat.completions.create(
+    model=os.environ["LLM_MODEL"],
+    temperature=0.2,
+    messages=[
+        {"role": "system", "content": TRIAGE_PROMPT},
+        {"role": "user", "content": payload.text},
+    ],
+    )
+    return response.choices[0].message.content
