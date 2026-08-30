@@ -1,5 +1,5 @@
 from fastapi import FastAPI,Response, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 import os
 from dotenv import load_dotenv
 import psycopg
@@ -7,8 +7,10 @@ from supabase import create_client, Client
 from fastapi import Header
 from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from src.llm.schema import TriageInput, TriageOutput, Category, Urgency
+from src.llm.schema import TriageInput, TriageOutput, Category, Urgency, extract_json
 from openai import OpenAI
+import json as jsonlib
+from datetime import datetime, timezone
 load_dotenv()
 llm_client = OpenAI(
     base_url=os.environ["LLM_BASE_URL"],
@@ -203,7 +205,17 @@ def startup():
 
     conn.close()
 
-
+def log_quarantine(input_text: str, raw_output: str, error: str):
+    os.makedirs("logs", exist_ok=True)
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "input": input_text,
+        "raw_output": raw_output,
+        "error": error,
+        "prompt_version": "triage-v1",
+    }
+    with open("logs/quarantine.jsonl", "a", encoding="utf-8") as f:
+        f.write(jsonlib.dumps(entry) + "\n")
 @app.post("/triage", response_model=TriageOutput, summary="Triage a todo item", description="Classifies messy todo text into a category and urgency level.")
 def triage_task(payload: TriageInput):
     if not payload.text or not payload.text.strip():
@@ -218,13 +230,47 @@ def triage_task(payload: TriageInput):
             confidence=0.5,
             reason="Stub mode: no model was called."
         )
+    result = call_and_validate(payload.text)
+    if result is None:
+        raise HTTPException(status_code=422, detail={"error": "Model could not produce a valid response after repair attempt"})
+    return result
+
+MAX_REPAIR_ATTEMPTS = 1
+def call_and_validate(user_text: str):
+    messages = [
+        {"role": "system", "content": TRIAGE_PROMPT},
+        {"role": "user", "content": user_text},
+    ]
 
     response = llm_client.chat.completions.create(
-    model=os.environ["LLM_MODEL"],
-    temperature=0.2,
-    messages=[
-        {"role": "system", "content": TRIAGE_PROMPT},
-        {"role": "user", "content": payload.text},
-    ],
+        model=os.environ["LLM_MODEL"],
+        temperature=0.2,
+        messages=messages,
     )
-    return response.choices[0].message.content
+    raw_text = response.choices[0].message.content
+
+    try:
+        parsed = extract_json(raw_text)
+        return TriageOutput(**parsed)
+    except (jsonlib.JSONDecodeError, ValidationError) as e:
+        # Repair retry: send the broken answer + the error back to the model
+        repair_messages = messages + [
+            {"role": "assistant", "content": raw_text},
+            {"role": "user", "content": f"Your previous answer was rejected for this reason: {e}. Return only corrected JSON matching the schema."}
+        ]
+        repair_response = llm_client.chat.completions.create(
+            model=os.environ["LLM_MODEL"],
+            temperature=0.2,
+            messages=repair_messages,
+        )
+        repair_text = repair_response.choices[0].message.content
+
+        try:
+            parsed = extract_json(repair_text)
+            return TriageOutput(**parsed)
+        except (jsonlib.JSONDecodeError, ValidationError) as e2:
+            log_quarantine(user_text, repair_text, str(e2))
+            return None
+        # signals total failure
+
+        
