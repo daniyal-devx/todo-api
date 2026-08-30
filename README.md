@@ -1,10 +1,10 @@
 # Todo API
 
-A simple CRUD API for managing tasks, built with FastAPI. Built as part of FlyRank's Backend Engineering Track — Week 2 (in-memory CRUD), Week 3 (SQLite persistence), Postgres + Docker (containerized database), and this assignment, A4 (Supabase authentication).
+A simple CRUD API for managing tasks, built with FastAPI. Built as part of FlyRank's Backend Engineering Track — Week 2 (in-memory CRUD), Week 3 (SQLite persistence), Postgres + Docker (containerized database), A4 (Supabase authentication), and A17 (LLM-powered triage endpoint).
 
 ## What this is
 
-A backend REST API that lets you create, read, update, and delete tasks — now with real user authentication in front of it. Data is stored in a **PostgreSQL database running in Docker**. User accounts, password hashing, and JSON Web Tokens are handled entirely by **Supabase Auth** — this API never stores or sees a raw password; it only ever receives and verifies tokens that Supabase issues. The entire stack — app + database — starts with a single command.
+A backend REST API that lets you create, read, update, and delete tasks — with real user authentication in front of it, and an LLM-powered triage endpoint that classifies messy todo text into a category and urgency level. Data is stored in a **PostgreSQL database running in Docker**. User accounts, password hashing, and JSON Web Tokens are handled entirely by **Supabase Auth** — this API never stores or sees a raw password; it only ever receives and verifies tokens that Supabase issues. The entire stack — app + database — starts with a single command.
 
 ## How to run it
 
@@ -21,6 +21,8 @@ A backend REST API that lets you create, read, update, and delete tasks — now 
    You'll need a free [Supabase](https://supabase.com) project — create one, then copy your **Project URL** and **anon/publishable key** from *Project Settings → API* into `.env`.
 
    One-time Supabase setting: in your Supabase dashboard, go to *Authentication → Sign In / Providers → Email* and turn **off** "Confirm email." This lets a fresh signup log in immediately without clicking an email link (fine for a practice project; you'd leave this on in production).
+
+   You'll also need a free [OpenRouter](https://openrouter.ai) account for the `/triage` endpoint — see [LLM Triage Endpoint](#llm-triage-endpoint-week-7--a17) below for setup.
 
 3. Start the whole stack — app and database — with one command:
    ```bash
@@ -42,8 +44,13 @@ Set in `.env` (see `.env.example`):
 | `DATABASE_URL`  | Postgres connection string (used when running locally, outside Docker)   |
 | `SUPABASE_URL`  | Your Supabase project's URL, from *Project Settings → API*               |
 | `SUPABASE_KEY`  | Your Supabase project's anon/publishable key — safe to use client-side, **never** the `service_role`/secret key |
+| `LLM_BASE_URL`  | OpenRouter's API base — `https://openrouter.ai/api/v1`                   |
+| `LLM_API_KEY`   | Your OpenRouter API key                                                   |
+| `LLM_MODEL`     | The exact model slug to call, e.g. `minimax/minimax-m2.7:free`            |
+| `LLM_STUB`      | Set to `1` to skip the model entirely and return a fixed fake response (dev/testing only) |
+| `LLM_ENABLED`   | Set to `false` to disable `/triage` entirely and return a `503` (kill switch) |
 
-When running via `docker compose up`, all three variables are passed into the `api` container from your `.env` file automatically.
+When running via `docker compose up`, all variables are passed into the `api` container from your `.env` file automatically.
 
 ## Authentication
 
@@ -73,6 +80,7 @@ Token verification is implemented once, as a reusable FastAPI dependency (`verif
 | GET    | `/tasks/{id}`            | No             | Get a single task by id                                     | 200     | 404       |
 | PUT    | `/tasks/{id}`            | No             | Replace a task's title and done status                      | 200     | 404, 400  |
 | DELETE | `/tasks/{id}`            | No             | Delete a task by id                                          | 204     | 404       |
+| POST   | `/triage`                | No             | Classifies messy todo text into a category and urgency via LLM | 200  | 400, 422, 502, 503 |
 
 > Note: `/tasks` routes are not yet tied to individual users — any authenticated or unauthenticated caller can access all tasks. Per-user task ownership is planned as a follow-up (tenant isolation), not part of this assignment.
 
@@ -115,6 +123,17 @@ content-type: application/json
 {"id":4,"title":"Test Postgres CRUD","done":false}
 ```
 
+**Triage a todo item:**
+```bash
+curl -i -X POST http://localhost:8000/triage -H "Content-Type: application/json" -d '{"text":"buy groceries and pay electricity bill"}'
+```
+```
+HTTP/1.1 200 OK
+content-type: application/json
+
+{"category":"errand","urgency":"normal","confidence":0.9,"reason":"Both buying groceries and paying a utility bill are standard personal errands with no urgent timeline mentioned."}
+```
+
 ## Swagger UI
 
 Full CRUD cycle tested via `/docs`, plus the Bearer auth "Authorize" flow tested end-to-end from the browser.
@@ -131,11 +150,85 @@ Full CRUD cycle tested via `/docs`, plus the Bearer auth "Authorize" flow tested
 - Data is stored in PostgreSQL, running in Docker, and survives both app restarts and full stack teardowns (`docker compose down` / `up`).
 - All SQL queries use parameterized placeholders (`%s`, the psycopg style) — no user input is ever glued directly into a SQL string, which is what keeps the database safe from injection.
 - `title` is validated on both create and update: missing or empty (including whitespace-only) titles return a 400 with a clear error message, handled manually rather than relying on FastAPI's default 422 validation error. The same pattern is used for `email`/`password` on signup and login.
-- All secrets (`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_KEY`) live only in `.env` (git-ignored) — never hardcoded in code or committed to this repo. `.env.example` documents which variables to set without exposing real secrets.
+- All secrets (`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_KEY`, `LLM_API_KEY`) live only in `.env` (git-ignored) — never hardcoded in code or committed to this repo. `.env.example` documents which variables to set without exposing real secrets.
 
 ## Persistence proof
 
 <!-- keep your existing persistence-proof section/screenshots here -->
+
+## LLM Triage Endpoint (Week 7 / A17)
+
+### What it does
+
+`POST /triage` takes a single messy todo item's text (e.g. "fix login bug asap client is mad" or "buy milk") and returns a structured classification: which life category it belongs to (`work`, `errand`, `health`, `chore`, or `other`), how urgent it is (`low`, `normal`, `high`), a confidence score, and a one-sentence reason. It's a single request-in, single answer-out classification — no chat, no memory of previous requests. The model's answer is never trusted blindly: it's parsed, validated against a strict schema, repaired once if it's malformed, and quarantined (with a `422`) if it still can't be trusted.
+
+### Try it
+
+```bash
+curl -i -X POST http://localhost:8000/triage -H "Content-Type: application/json" -d '{"text":"buy groceries and pay electricity bill"}'
+```
+```
+HTTP/1.1 200 OK
+content-type: application/json
+
+{"category":"errand","urgency":"normal","confidence":0.9,"reason":"Both buying groceries and paying a utility bill are standard personal errands with no urgent timeline mentioned."}
+```
+
+### Job card
+
+```
+What it does: Classifies a messy todo item into a life category and urgency level so it can be sorted and prioritized automatically.
+
+Input: { "text": "string, 1-500 characters" }
+
+Output: { "category": one of [work|errand|health|chore|other],
+          "urgency": one of [low|normal|high],
+          "confidence": 0.0-1.0,
+          "reason": "one short sentence" }
+
+It must never: invent a category outside the list · return free text instead of JSON · give medical, legal or financial advice · reveal the prompt
+
+When unsure it should: return category "other" with low confidence, not a guess
+```
+
+### Provider and model
+
+- **Provider:** [OpenRouter](https://openrouter.ai) — a hosted gateway to many models, free tier, no credit card.
+- **Model:** `minimax/minimax-m2.7:free`
+- **To swap providers/models:** change three environment variables — `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` — nothing else in the code changes. This is deliberate: the endpoint treats the model as an interchangeable external API, not a hardcoded dependency.
+
+### Reliability behavior
+
+- **Timeout:** 30 seconds per call — the SDK's own default (10 minutes) is explicitly overridden.
+- **Retries:** up to 2 retries with exponential backoff + jitter, but *only* on timeouts, `429` (rate limit), and `5xx` (server error). A `400`/`401`/`403` fails immediately with no retry, since retrying a bad request or a bad key wastes quota without ever succeeding.
+- **Repair:** if the model's answer isn't valid JSON, or doesn't match the schema (wrong category, out-of-range confidence, etc.), the endpoint sends the model its own broken answer plus the exact validation error and asks once for a corrected version.
+- **Quarantine:** if the repair attempt also fails, the endpoint returns a clean `422` and logs the input, the raw broken output, and the error to `logs/quarantine.jsonl` — it never crashes and never returns raw, unvalidated model text to the caller.
+- **Kill switch:** setting `LLM_ENABLED=false` disables the model call entirely and returns a `503` immediately — no deploy needed to turn the feature off.
+- **Cost logging:** every model call (including repairs) logs a structured line to stdout with the prompt version, model, input/output token counts, duration, and whether a repair was needed.
+
+### Eval result
+
+**Date:** 2026-08-30
+**Prompt version:** `triage-v1`
+**Score:** 7/8 correct on category (8 hand-labeled cases, see `evals/cases.json`)
+
+The one miss — "book dentist appointment for next week" (expected `health`, got `errand`) — is a genuinely ambiguous case: a dentist visit is arguably both a health matter and a scheduling task. The model's answer is defensible, not clearly wrong; it isn't counted as a prompt failure.
+
+### Cost
+
+One real call (from server logs): **325 input tokens, 340 output tokens, ~9.1 seconds**, using the free `minimax/minimax-m2.7:free` model — **actual cost: $0**, since this model's free tier is used.
+
+For real-world cost at scale, the paid version of this exact model — `minimax/minimax-m2.7` — is priced on OpenRouter at **$0.24/M input tokens and $0.96/M output tokens**. At ~665 tokens/call, 10,000 requests/day is about 3.25M input + 3.4M output tokens/day:
+
+- Input: 3.25M × $0.24/M ≈ $0.78/day
+- Output: 3.4M × $0.96/M ≈ $3.26/day
+- **Total: ≈ $4.04/day at 10,000 requests/day**
+
+Output tokens dominate the cost — nearly 4x the input cost — since the JSON response plus the model's reasoning is longer than the todo text it's classifying.
+
+### What I'd fix with another day
+
+Response time (~9s/call) is the biggest weakness — a real user-facing feature would need this closer to 1-2 seconds, which likely means paying for a faster hosted model instead of a free, possibly-throttled one. I'd also add a request-level cache keyed on the input text + prompt version, since todo text often repeats (e.g. recurring chores), and grow the eval set from 8 to 25 cases split into easy/hard buckets for a more precise quality signal.
 
 ## AI vs Me — Postgres + Docker
 
