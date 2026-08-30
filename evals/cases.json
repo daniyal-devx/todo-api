@@ -1,0 +1,10 @@
+[
+  {"text": "fix login bug asap client is mad", "expected_category": "work", "expected_urgency": "high"},
+  {"text": "buy milk and eggs", "expected_category": "errand", "expected_urgency": "low"},
+  {"text": "book dentist appointment for next week", "expected_category": "health", "expected_urgency": "normal"},
+  {"text": "clean the kitchen", "expected_category": "chore", "expected_urgency": "low"},
+  {"text": "server is down, production outage, fix now", "expected_category": "work", "expected_urgency": "high"},
+  {"text": "pay electricity bill before due date", "expected_category": "errand", "expected_urgency": "normal"},
+  {"text": "go for a 30 minute run", "expected_category": "health", "expected_urgency": "low"},
+  {"text": "thing", "expected_category": "other", "expected_urgency": "low"}
+]
