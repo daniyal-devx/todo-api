@@ -11,10 +11,14 @@ from src.llm.schema import TriageInput, TriageOutput, Category, Urgency, extract
 from openai import OpenAI
 import json as jsonlib
 from datetime import datetime, timezone
+import time
+import random
+from openai import APITimeoutError, RateLimitError, APIStatusError
 load_dotenv()
 llm_client = OpenAI(
     base_url=os.environ["LLM_BASE_URL"],
     api_key=os.environ["LLM_API_KEY"],
+    timeout=30.0,
 )
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -216,12 +220,26 @@ def log_quarantine(input_text: str, raw_output: str, error: str):
     }
     with open("logs/quarantine.jsonl", "a", encoding="utf-8") as f:
         f.write(jsonlib.dumps(entry) + "\n")
+def log_cost(prompt_version: str, model: str, input_tokens: int, output_tokens: int, duration_ms: int, repaired: bool):
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "prompt_version": prompt_version,
+        "model": model,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "duration_ms": duration_ms,
+        "repaired": repaired,
+    }
+    print(jsonlib.dumps(entry))
 @app.post("/triage", response_model=TriageOutput, summary="Triage a todo item", description="Classifies messy todo text into a category and urgency level.")
 def triage_task(payload: TriageInput):
     if not payload.text or not payload.text.strip():
         raise HTTPException(status_code=400, detail={"error": "text is required"})
     if len(payload.text) > 500:
         raise HTTPException(status_code=400, detail={"error": "text must be 500 characters or fewer"})
+
+    if os.getenv("LLM_ENABLED", "true").lower() == "false":
+        raise HTTPException(status_code=503, detail={"error": "Triage is temporarily disabled"})
 
     if os.getenv("LLM_STUB") == "1":
         return TriageOutput(
@@ -230,11 +248,46 @@ def triage_task(payload: TriageInput):
             confidence=0.5,
             reason="Stub mode: no model was called."
         )
-    result = call_and_validate(payload.text)
+    try:
+        result = call_and_validate(payload.text)
+    except (APITimeoutError, RateLimitError, APIStatusError) as e:
+        raise HTTPException(status_code=502, detail={"error": "LLM provider error", "detail": str(e)})
+
     if result is None:
         raise HTTPException(status_code=422, detail={"error": "Model could not produce a valid response after repair attempt"})
     return result
+MAX_RETRIES = 2
 
+def call_model_with_retry(messages: list) -> dict:
+    last_error = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            start = time.time()
+            response = llm_client.chat.completions.create(
+                model=os.environ["LLM_MODEL"],
+                temperature=0.2,
+                messages=messages,
+            )
+            duration_ms = int((time.time() - start) * 1000)
+            return {
+                "text": response.choices[0].message.content,
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+                "duration_ms": duration_ms,
+            }
+        except (APITimeoutError, RateLimitError) as e:
+            last_error = e
+        except APIStatusError as e:
+            if 500 <= e.status_code < 600:
+                last_error = e
+            else:
+                raise
+
+        if attempt < MAX_RETRIES:
+            wait = (2 ** attempt) + random.uniform(0, 1)
+            time.sleep(wait)
+
+    raise last_error
 MAX_REPAIR_ATTEMPTS = 1
 def call_and_validate(user_text: str):
     messages = [
@@ -242,12 +295,17 @@ def call_and_validate(user_text: str):
         {"role": "user", "content": user_text},
     ]
 
-    response = llm_client.chat.completions.create(
+    result = call_model_with_retry(messages)
+    raw_text = result["text"]
+
+    log_cost(
+        prompt_version="triage-v1",
         model=os.environ["LLM_MODEL"],
-        temperature=0.2,
-        messages=messages,
+        input_tokens=result["input_tokens"],
+        output_tokens=result["output_tokens"],
+        duration_ms=result["duration_ms"],
+        repaired=False,
     )
-    raw_text = response.choices[0].message.content
 
     try:
         parsed = extract_json(raw_text)
@@ -258,12 +316,17 @@ def call_and_validate(user_text: str):
             {"role": "assistant", "content": raw_text},
             {"role": "user", "content": f"Your previous answer was rejected for this reason: {e}. Return only corrected JSON matching the schema."}
         ]
-        repair_response = llm_client.chat.completions.create(
+        repair_result = call_model_with_retry(repair_messages)
+        repair_text = repair_result["text"]
+
+        log_cost(
+            prompt_version="triage-v1",
             model=os.environ["LLM_MODEL"],
-            temperature=0.2,
-            messages=repair_messages,
+            input_tokens=repair_result["input_tokens"],
+            output_tokens=repair_result["output_tokens"],
+            duration_ms=repair_result["duration_ms"],
+            repaired=True,
         )
-        repair_text = repair_response.choices[0].message.content
 
         try:
             parsed = extract_json(repair_text)
@@ -271,6 +334,5 @@ def call_and_validate(user_text: str):
         except (jsonlib.JSONDecodeError, ValidationError) as e2:
             log_quarantine(user_text, repair_text, str(e2))
             return None
-        # signals total failure
 
         
